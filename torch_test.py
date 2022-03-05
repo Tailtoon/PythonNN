@@ -1,3 +1,4 @@
+import imp
 import time
 import torch
 import torch.nn as nn
@@ -8,6 +9,7 @@ from torchvision.transforms import transforms
 #from model import discriminator, generator
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
 print(torch.cuda.is_available())
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -64,55 +66,62 @@ transform = transforms.Compose([transforms.ToTensor(),
 train_set = datasets.MNIST('mnist/', train=True, download=True, transform=transform)
 train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-def main():
+def train():
     # Обучение производим эпохами, количество которых задается гиперпараметром
-    for epoch in range(epochs):
-        for idx, (imgs, _) in enumerate(train_loader):
-            idx += 1
-            # Обучаем дискриминатор
-            # real_inputs - изображения из набора данных MNIST 
-            # fake_inputs - изображения от генератора
-            # real_inputs должны быть классифицированы как 1, а fake_inputs - как 0
-            real_inputs = imgs.to(device)
-            real_outputs = D(real_inputs)
-            real_label = torch.ones(real_inputs.shape[0], 1).to(device)
-            noise = (torch.rand(real_inputs.shape[0], 128) - 0.5) / 0.5
-            noise = noise.to(device)
-            fake_inputs = G(noise)
-            fake_outputs = D(fake_inputs)
-            fake_label = torch.zeros(fake_inputs.shape[0], 1).to(device)
-            outputs = torch.cat((real_outputs, fake_outputs), 0)
-            targets = torch.cat((real_label, fake_label), 0)
-            D_loss = loss(outputs, targets)
-            D_optimizer.zero_grad()
-            D_loss.backward()
-            D_optimizer.step()
-            # Обучаем генератор
-            # Цель генератора получить от дискриминатора 1 по всем изображениям
-            noise = (torch.rand(real_inputs.shape[0], 128)-0.5)/0.5
-            noise = noise.to(device)
-            fake_inputs = G(noise)
-            fake_outputs = D(fake_inputs)
-            fake_targets = torch.ones([fake_inputs.shape[0], 1]).to(device)
-            G_loss = loss(fake_outputs, fake_targets)
-            G_optimizer.zero_grad()
-            G_loss.backward()
-            G_optimizer.step()
-            if idx % 100 == 0 or idx == len(train_loader):
-                print('Epoch {} Iteration {}: discriminator_loss {:.3f} generator_loss {:.3f}'.format(epoch, idx, D_loss.item(), G_loss.item()))
-        if (epoch+1) % 10 == 0:
-            torch.save(G, 'Generator_epoch_{}.pth'.format(epoch))
-            print('Model saved.')
-    latent_space_samples = torch.randn(batch_size, 128).to(device=device)
-    generated_samples = G(latent_space_samples)
-    generated_samples = generated_samples.cpu().detach()
+        for epoch in range(epochs):
+            for idx, (imgs, _) in enumerate(train_loader):
+                idx += 1
+                # Обучаем дискриминатор
+                # real_inputs - изображения из набора данных MNIST 
+                # fake_inputs - изображения от генератора
+                # real_inputs должны быть классифицированы как 1, а fake_inputs - как 0
+                real_inputs = imgs.to(device)
+                real_outputs = D(real_inputs)
+                real_label = torch.ones(real_inputs.shape[0], 1).to(device)
+                noise = (torch.rand(real_inputs.shape[0], 128) - 0.5) / 0.5
+                noise = noise.to(device)
+                fake_inputs = G(noise)
+                fake_outputs = D(fake_inputs)
+                fake_label = torch.zeros(fake_inputs.shape[0], 1).to(device)
+                outputs = torch.cat((real_outputs, fake_outputs), 0)
+                targets = torch.cat((real_label, fake_label), 0)
+                D_loss = loss(outputs, targets)
+                D_optimizer.zero_grad()
+                D_loss.backward()
+                D_optimizer.step()
+                # Обучаем генератор
+                # Цель генератора получить от дискриминатора 1 по всем изображениям
+                noise = (torch.rand(real_inputs.shape[0], 128)-0.5)/0.5
+                noise = noise.to(device)
+                fake_inputs = G(noise)
+                fake_outputs = D(fake_inputs)
+                fake_targets = torch.ones([fake_inputs.shape[0], 1]).to(device)
+                G_loss = loss(fake_outputs, fake_targets)
+                G_optimizer.zero_grad()
+                G_loss.backward()
+                G_optimizer.step()
+                if idx % 100 == 0 or idx == len(train_loader):
+                    print('Epoch {} Iteration {}: discriminator_loss {:.3f} generator_loss {:.3f}'.format(epoch, idx, D_loss.item(), G_loss.item()))
+        torch.save(G, 'Generator.pth')
+        print('Model saved.')
 
-    for i in range(16):
-        ax = plt.subplot(4, 4, i + 1)
-        plt.imshow(generated_samples[i].reshape(28, 28), cmap="gray_r")
-        plt.xticks([])
-        plt.yticks([])
-    plt.show()
+def main():
+    if os.path.isfile("Generator.pth"):
+        try:
+            G = torch.load('Generator.pth', map_location=device)
+            latent_space_samples = torch.randn(batch_size, 128).to(device=device)
+            generated_samples = G(latent_space_samples)
+            generated_samples = generated_samples.cpu().detach()
+            for i in range(16):
+                ax = plt.subplot(4, 4, i + 1)
+                plt.imshow(generated_samples[i].reshape(28, 28), cmap="gray_r")
+                plt.xticks([])
+                plt.yticks([])
+            plt.show()
+        except:
+            train()
+    else:
+        train()
 
 
 if __name__ == "__main__":
