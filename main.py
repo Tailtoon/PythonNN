@@ -1,13 +1,15 @@
-from ast import Global
-import time
 import random
+from turtle import forward
+from typing import OrderedDict
+from matplotlib import image
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 from torchvision import datasets
 from torchvision.transforms import transforms
-from torch.autograd import Variable
+from torchinfo import summary
+
 from skimage import io, color
 from skimage.transform import resize
 from torch.utils.data import Dataset, DataLoader
@@ -15,138 +17,155 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-class Dense_Block(nn.Module):
-    def __init__(self, in_channels):
-        super(Dense_Block, self).__init__()
-        self.relu = nn.ReLU(inplace = True)
-        self.bn = nn.BatchNorm2d(num_features = in_channels)
+class _DenseLayer(nn.Module):
+    def __init__(self, in_channels, growth_rate, bn_size):
+        super(_DenseLayer, self).__init__()
+        self.add_module('norm1', nn.BatchNorm2d(in_channels))
+        self.add_module('relu1', nn.ReLU(inplace=True))
+        self.add_module('conv1', nn.Conv2d(in_channels=in_channels, out_channels=bn_size * growth_rate, 
+                                           kernel_size=1, stride=1, bias=False))
+        self.add_module('norm2', nn.BatchNorm2d(bn_size * growth_rate))
+        self.add_module('relu2', nn.ReLU(inplace=True))
+        self.add_module('conv2', nn.Conv2d(in_channels=bn_size * growth_rate, out_channels=growth_rate, 
+                                           kernel_size=3, stride=1, padding=1, bias=False))
     
-        self.conv1 = nn.Conv2d(in_channels = in_channels, out_channels = 4, kernel_size = 3, stride = 1, padding = 1)
-        self.conv2 = nn.Conv2d(in_channels = 4, out_channels = 4, kernel_size = 3, stride = 1, padding = 1)
-        self.conv3 = nn.Conv2d(in_channels = 8, out_channels = 4, kernel_size = 3, stride = 1, padding = 1)
-        self.conv4 = nn.Conv2d(in_channels = 12, out_channels = 4, kernel_size = 3, stride = 1, padding = 1)
-        self.conv5 = nn.Conv2d(in_channels = 16, out_channels = 4, kernel_size = 3, stride = 1, padding = 1)
-    def forward(self, x):
-        bn = self.bn(x)
-        conv1 = self.relu(self.conv1(bn))
-        conv2 = self.relu(self.conv2(conv1))
-    # Concatenate in channel dimension
-        c2_dense = self.relu(torch.cat([conv1, conv2], 1))
-        conv3 = self.relu(self.conv3(c2_dense))
-        c3_dense = self.relu(torch.cat([conv1, conv2, conv3], 1))
-   
-        conv4 = self.relu(self.conv4(c3_dense))
-        c4_dense = self.relu(torch.cat([conv1, conv2, conv3, conv4], 1))
-   
-        conv5 = self.relu(self.conv5(c4_dense))
-        c5_dense = self.relu(torch.cat([conv1, conv2, conv3, conv4, conv5], 1))
-   
-        return c5_dense
+    def bn_function(self, inputs):
+        concated_layers = torch.cat(inputs, 1)
+        bottleneck_output = self.conv1(self.relu1(self.norm1(concated_layers)))
+        return bottleneck_output
 
-class Transition_Layer(nn.Module): 
+    def forward(self, input):
+        if isinstance(input, torch.Tensor):
+            prev_layers = [input]
+        else:
+            prev_layers = input
+        
+        bottleneck_output = self.bn_function(prev_layers)
+        new_features = self.conv2(self.relu2(self.norm2(bottleneck_output)))
+
+        return new_features
+
+class _DenseBlock(nn.ModuleDict):
+    def __init__(self, num_layers, in_channels, growth_rate, bn_size):
+        super(_DenseBlock, self).__init__()
+        for i in range(num_layers):
+            layer = _DenseLayer(
+                in_channels=in_channels + i * growth_rate,
+                growth_rate=growth_rate,
+                bn_size=bn_size,
+            )
+            self.add_module('denselayer{}'.format(i), layer)
+
+    def forward(self, init_features):
+        features = [init_features]
+        for name, layer in self.items():
+            new_features = layer(features)
+            features.append(new_features)
+        return torch.cat(features, 1)
+
+class _DownTransition(nn.Sequential):
     def __init__(self, in_channels, out_channels):
-        super(Transition_Layer, self).__init__() 
-    
-        self.relu = nn.ReLU(inplace = True) 
-        self.bn = nn.BatchNorm2d(num_features = out_channels) 
-        self.conv = nn.Conv2d(in_channels = in_channels, out_channels = out_channels, kernel_size = 3, stride = 1, padding = 1, bias = False) 
-        #self.avg_pool = nn.AvgPool2d(kernel_size = 2, stride = 2, padding = 0)
-    def forward(self, x): 
-        out = self.bn(self.relu(self.conv(x))) 
-        #out = self.avg_pool(bn) 
-        return out
+        super(_DownTransition, self).__init__()
+        self.add_module('norm', nn.BatchNorm2d(in_channels))
+        self.add_module('relu', nn.ReLU(inplace=True))
+        self.add_module('conv', nn.Conv2d(in_channels=in_channels, out_channels=out_channels, 
+                                          kernel_size=2, stride=2, bias=False))
 
-class UpTransition_Layer(nn.Module): 
+class _UpTransition(nn.Sequential):
     def __init__(self, in_channels, out_channels):
-        super(UpTransition_Layer, self).__init__() 
-    
-        self.relu = nn.ReLU(inplace = True) 
-        self.bn = nn.BatchNorm2d(num_features = out_channels) 
-        #self.conv = nn.ConvTranspose2d(in_channels = in_channels, out_channels = out_channels, kernel_size = 2, stride = 2, bias = False)
-        self.conv = nn.Conv2d(in_channels = in_channels, out_channels = out_channels, kernel_size = 3, stride = 1, padding = 1, bias = False)   
-    def forward(self, x): 
-        out = self.bn(self.relu(self.conv(x))) 
-        return out
+        super(_UpTransition, self).__init__()
+        self.add_module('norm', nn.BatchNorm2d(in_channels))
+        self.add_module('relu', nn.ReLU(inplace=True))
+        self.add_module('convT', nn.ConvTranspose2d(in_channels=in_channels, out_channels=out_channels, 
+                                                    kernel_size=2, stride=2, bias=False))
 
-class DenseNet(nn.Module): 
-    def __init__(self, nr_classes): 
-        super(DenseNet, self).__init__() 
-  
-        self.lowconv = nn.Conv2d(in_channels = 3, out_channels = 8, kernel_size = 7, padding = 3, bias = False) 
-        self.relu = nn.ReLU()
+class _ResImageNet(nn.Module):
+    def __init__(self, growth_rate=4, block_config=(4, 4, 4, 4),
+                 num_init_features=8, bn_size=4):
+        super(_ResImageNet, self).__init__()
+
+        if len(block_config) % 2:
+            print("ERROR: len(block_config) is not a multiple of 2")
+            return
+
+        self.features = nn.Sequential(OrderedDict([
+            ('conv0', nn.Conv2d(in_channels=3, out_channels=num_init_features, 
+                                kernel_size=7, padding=3, bias=False)),
+            ('norm0', nn.BatchNorm2d(num_init_features)),
+            ('relu', nn.ReLU(inplace=True)),
+        ]))
+
+        num_features = num_init_features
+        for i, num_layers in enumerate(block_config):
+            block = _DenseBlock(
+                num_layers=num_layers,
+                in_channels=num_features,
+                growth_rate=growth_rate,
+                bn_size=bn_size,
+            )
+            self.features.add_module('denseblock{}'.format(i), block)
+            num_features += num_layers * growth_rate
+            if i <= len(block_config) // 2 - 1:
+                trans = _DownTransition(in_channels=num_features,
+                                        out_channels=num_features // 2)
+            else:
+                trans = _UpTransition(in_channels=num_features,
+                                        out_channels=num_features // 2)
+            self.features.add_module('transition{}'.format(i + 1), trans)
+            num_features = num_features // 2
+        
+        self.features.add_module('norm', nn.BatchNorm2d(num_features))
+        self.features.add_module('conv3x3', nn.Conv2d(in_channels=num_features, out_channels=3, 
+                                                    kernel_size=3, stride=1, padding=1, bias=False))
+        self.features.add_module('sigm', nn.Sigmoid())
+        # Init weights before start learning
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.ConvTranspose2d):
+                nn.init.kaiming_normal_(m.weight)
     
-        # Make Dense Blocks 
-        self.denseblock1 = self._make_dense_block(Dense_Block, 8) 
-        self.denseblock2 = self._make_dense_block(Dense_Block, 16)
-        self.denseblock3 = self._make_dense_block(Dense_Block, 16)
-        # Make transition Layers 
-        self.transitionLayer1 = self._make_transition_layer(Transition_Layer, in_channels = 20, out_channels = 16) 
-        self.transitionLayer2 = self._make_transition_layer(Transition_Layer, in_channels = 20, out_channels = 16) 
-        self.transitionLayer3 = self._make_transition_layer(Transition_Layer, in_channels = 20, out_channels = 8)
-        # Upsampling transition layers
-        self.uptransitionLayer1 = self._make_transition_layer(UpTransition_Layer, in_channels = 8, out_channels = 16) 
-        self.uptransitionLayer2 = self._make_transition_layer(UpTransition_Layer, in_channels = 16, out_channels = 20) 
-        self.uptransitionLayer3 = self._make_transition_layer(UpTransition_Layer, in_channels = 20, out_channels = 3)
-        # Classifier
-        self.sigm = nn.Sigmoid()
-        self.bn = nn.BatchNorm2d(num_features = 8) 
-        self.pre_classifier = nn.Linear(64*4*4, 512) 
-        self.classifier = nn.Linear(512, nr_classes)
- 
-    def _make_dense_block(self, block, in_channels): 
-        layers = [] 
-        layers.append(block(in_channels)) 
-        return nn.Sequential(*layers)
-    def _make_transition_layer(self, layer, in_channels, out_channels): 
-        modules = [] 
-        modules.append(layer(in_channels, out_channels)) 
-        return nn.Sequential(*modules)
     def forward(self, x):
-        #print(x.shape) 
-        out = self.relu(self.lowconv(x))
-        #print(out.shape)
-
-        out = self.denseblock1(out)
-        #print(out.shape) 
-        out = self.transitionLayer1(out)
-        #print(out.shape)
-
-        out = self.denseblock2(out) 
-        #print(out.shape)
-        out = self.transitionLayer2(out)
-        #print(out.shape) 
-    
-        out = self.denseblock3(out) 
-        #print(out.shape)
-        out = self.transitionLayer3(out) 
-        #print(out.shape)
- 
-        out = self.bn(out)
-        #print(out.shape)
-
-        out = self.uptransitionLayer1(out)
-        #print(out.shape)
-        out = self.uptransitionLayer2(out)
-        #print(out.shape)
-        out = self.uptransitionLayer3(out)
-        #print(out.shape)
-        # out = out.view(-1, 64*4*4) 
-    
-        # out = self.pre_classifier(out) 
-        # out = self.classifier(out)
-        return self.sigm(out)
+        out = self.features(x)
+        return out
 
 class ResImageDataset(Dataset):
     def __init__(self, dir_name, transform=None):
         self.dir_name = dir_name
         self.raw = os.listdir(os.path.join(dir_name, "raw"))
         self.inpainted = os.listdir(os.path.join(dir_name, "inpainted"))
-        print("raw", self.raw)
-        print("inpainted", self.inpainted)
         self.transform = transform
     
     def __len__(self):
         return len(self.raw)
+
+    def imageTransform(self, raw_image, inpainted_image):
+        # Gray to RGB conversion
+        if len(raw_image.shape) < 3:
+            raw_image = color.gray2rgb(raw_image)
+        if len(inpainted_image.shape) < 3:
+            inpainted_image = color.gray2rgb(inpainted_image)
+        # RGBA to RGB conversion
+        if raw_image.shape[2] > 3:
+            raw_image = color.rgba2rgb(raw_image)
+        if inpainted_image.shape[2] > 3:
+            inpainted_image = color.rgba2rgb(inpainted_image)
+
+        if raw_image.shape != inpainted_image.shape:
+            print("Image size problem (raw shape {} and inpainted {}): resizing raw to inpainted".format(raw_image.shape, inpainted_image.shape))
+            raw_image = resize(raw_image, (inpainted_image.shape[0], inpainted_image.shape[1]))
+        
+        # Resize to closest 4*N
+        w = inpainted_image.shape[0]
+        w = (w // 4) * 4
+        h = inpainted_image.shape[1]
+        h = (h // 4) * 4
+        raw_image = resize(raw_image, (w, h))
+        inpainted_image = resize(inpainted_image, (w, h))
+        return raw_image, inpainted_image
 
     def __getitem__(self, index):
         if torch.is_tensor(index):
@@ -155,18 +174,9 @@ class ResImageDataset(Dataset):
         raw_image = io.imread(os.path.join(self.dir_name, "raw", self.raw[index]))
         inpainted_image = io.imread(os.path.join(self.dir_name, "inpainted", self.inpainted[index]))
 
+        raw_image, inpainted_image = self.imageTransform(raw_image, inpainted_image)
+
         sample = None
-
-        if len(raw_image.shape) < 3:
-            raw_image = color.gray2rgb(raw_image)
-        if len(inpainted_image.shape) < 3:
-            inpainted_image = color.gray2rgb(inpainted_image)
-
-        if raw_image.shape != inpainted_image.shape:
-            print("Image {} size problem".format(index))
-            print(raw_image.shape)
-            raw_image = resize(raw_image, (inpainted_image.shape[0], inpainted_image.shape[1]))
-
         if self.transform:
             sample = {"raw": self.transform(raw_image),
                       "inpainted": self.transform(inpainted_image)}
@@ -176,115 +186,152 @@ class ResImageDataset(Dataset):
 
         return sample
 
+class ResImageNet():
+    def __init__(self, device=None, try_to_train=False, image_dir=None,
+                 epochs=100, lr=1e-3, batch_size=1,
+                 growth_rate=4, block_config=(4, 4, 4, 4), num_init_features=8, bn_size=4):
+        self.device = device
+        self.image_dir = image_dir
+        # Choose appropriate device
+        if self.device == None:
+            print("None device is given. Trying to use cuda...")
+            if torch.cuda.is_available():
+                print("Cuda is available. device = cuda.")
+                self.device = torch.device('cuda')
+            else:
+                print("Cuda isn't available. device = cpu.")
+                self.device = torch.device('cpu')
+        # Create model of ResImageNet
+        self.model = _ResImageNet(
+            growth_rate = growth_rate,
+            block_config = block_config,
+            num_init_features = num_init_features,
+            bn_size = bn_size,
+        )
+        if os.path.isfile("ResImageNet.pth"):
+            print("File with model 'ResImageNet.pth' found...")
+            try:
+                self.model = torch.load('ResImageNet.pth', map_location=self.device)
+                print("Model successfully loaded.")
+            except Exception as ex:
+                print(ex)
+                return
+        else:
+            if try_to_train:
+                if image_dir == None:
+                    print("Error: image_dir isn't set")
+                    return
+                else:
+                    try:
+                        self.model.to(self.device)
+                        self.__train(image_dir, epochs, lr, batch_size)
+                    except Exception as ex:
+                        print(ex)
+                        return
+            else:
+                print("File with model 'ResImageNet.pth' not found and try_to_train is False. If you want to train model, set try_to_train to True.")
+                return
 
-print("Is cuda possible = ", torch.cuda.is_available())
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-# device = torch.device('cpu')
+    def __call__(self, img_input):
+        shape = img_input.shape
+        img_input = img_input.view(1, shape[0], shape[1], shape[2]).to(self.device, dtype = torch.float)
+        img_output = self.model(img_input)
 
-# Гиперпараметры
-epochs = 10
-lr = 1e-2
-batch_size = 1
-# Логистическая функция потерь (бинарная перекрестная энтропия) 
-loss = nn.BCELoss()
+        return img_output
 
-# Создание моделей и передача их на устройство (в нашем случае - видеокарта)
-G = DenseNet(6).to(device)
+    def __train(self, image_dir, epochs, lr, batch_size):
+        # Loss function is BCE
+        loss = nn.BCELoss()
+        # Optimazer for model is Adam
+        optimizer = optim.Adam(self.model.parameters(), lr=lr)
+        # Create transform to torch.Tensor
+        transform = transforms.Compose([transforms.ToTensor()])
+        # Use ResImageDataset for auto image pack to samples
+        train_set = ResImageDataset(image_dir, transform=transform)
+        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-G_optimizer = optim.Adam(G.parameters(), lr=lr)
+        # Begin of train
+        print("Start train net:")
+        for epoch in range(1, epochs + 1):
+            # Monitor training loss
+            train_loss = 0.0
 
-# Создание преобразователя изображений из набора MNIST
-transform = transforms.Compose([transforms.ToTensor()])
-
-train_set = ResImageDataset("Images", transform=transform)
-train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
-
-def test_train():
-    for epoch in range(1, epochs + 1):
-        # monitor training loss
-        train_loss = 0.0
-
-        #Training
-        for i, sample in enumerate(train_loader):
-            raw = sample["raw"]
-            #print(raw.shape)
-            shape = raw.shape
-            raw = raw.view(1, shape[1], shape[2], shape[3]).to(device, dtype = torch.float)
-            inpainted = sample["inpainted"]
-            shape = inpainted.shape
-            inpainted = inpainted.view(1, shape[1], shape[2], shape[3]).to(device, dtype = torch.float)
-            G_optimizer.zero_grad()
-            outputs = G(raw)
-            cur_loss = loss(outputs, inpainted)
-            cur_loss.backward()
-            G_optimizer.step()
-            train_loss += cur_loss.item()
-            
+            for i, sample in enumerate(train_loader):
+                print("Epoch {}. Processing image {}".format(epoch, i), end='.')
+                raw = sample["raw"]
+                shape = raw.shape
+                raw = raw.view(1, shape[1], shape[2], shape[3]).to(self.device, dtype = torch.float)
+                inpainted = sample["inpainted"]
+                shape = inpainted.shape
+                inpainted = inpainted.view(1, shape[1], shape[2], shape[3]).to(self.device, dtype = torch.float)
+                optimizer.zero_grad()
+                outputs = self.model(raw)
+                cur_loss = loss(outputs, inpainted)
+                cur_loss.backward()
+                optimizer.step()
+                train_loss += cur_loss.item()
+                print(" Complete.")
+                del raw, inpainted, cur_loss
+                
             train_loss = train_loss/len(train_loader)
-            print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, train_loss))
-    torch.save(G, 'Generator.pth')
-    print('Model saved.')
+            print("Epoch: {} \tTraining Loss: {:.6f}".format(epoch, train_loss))
+        torch.save(self.model, 'ResImageNet.pth')
+        print("Model saved to 'ResImageNet.pth'")
+    
+    def testImage(self):
+        # Create transform to torch.Tensor
+        transform = transforms.Compose([transforms.ToTensor()])
+
+        # Use ResImageDataset for auto image pack to samples
+        train_set = ResImageDataset(self.image_dir, transform=transform)
+        fig = plt.figure()
+
+        img_index = random.randint(0, len(train_set) - 1)
+
+        sample = train_set[img_index]
+
+        img_input = sample["raw"]
+        img_output = self.__call__(img_input) 
+        transform_tmp = transforms.ToPILImage()
+        img_output = img_output.view(3, img_output.shape[2], img_output.shape[3]).cpu().detach()
+        img_output = transform_tmp(img_output)
+        img_input = img_input.cpu().detach()
+        img_input = transform_tmp(img_input)
+
+        img_inpainted = sample["inpainted"]
+        img_inpainted = img_inpainted.cpu().detach()
+        img_inpainted = transform_tmp(img_inpainted)
+
+        ax = plt.subplot(1, 3, 1)
+
+        plt.tight_layout()
+        ax.set_title("Input")
+        ax.axis('off')
+        plt.imshow(img_input)
+        plt.pause(0.001)
+
+        ax = plt.subplot(1, 3, 2)
+
+        ax.set_title("Output")
+        ax.axis('off')
+        plt.imshow(img_output)
+        plt.pause(0.001)
+
+        ax = plt.subplot(1, 3, 3)
+
+        ax.set_title("Inpainted")
+        ax.axis('off')
+        plt.imshow(img_inpainted)
+        plt.pause(0.001)
+        plt.show()
+    
+    def summary(self):
+        summary(self.model, input_size=(1, 3, 1024, 1024))
 
 def main():
-    global G
-    if os.path.isfile("Generator.pth"):
-        try:
-            G = torch.load('Generator.pth', map_location=device)
-
-            fig = plt.figure()
-
-            img_index = random.randint(0, len(train_set) - 1)
-
-            img_input = train_set[img_index]["raw"]
-            shape = img_input.shape
-            img_input = img_input.view(1, shape[0], shape[1], shape[2]).to(device, dtype = torch.float)
-            print(img_input.shape)
-
-            img_output = G(img_input)
-            transform_tmp = transforms.ToPILImage()
-            img_output = img_output.view(3, img_output.shape[2], img_output.shape[3]).cpu().detach()
-            img_output = transform_tmp(img_output)
-            img_input = img_input.view(3, img_input.shape[2], img_input.shape[3]).cpu().detach()
-            img_input = transform_tmp(img_input)
-
-            img_inpainted = train_set[img_index]["inpainted"]
-            img_inpainted = img_inpainted.cpu().detach()
-            img_inpainted = transform_tmp(img_inpainted)
-
-            print(type(img_output))
-            #print(img_output.shape)
-
-            ax = plt.subplot(1, 3, 1)
-
-            plt.tight_layout()
-            ax.set_title("Input")
-            ax.axis('off')
-            plt.imshow(img_input)
-            plt.pause(0.001)
-
-            ax = plt.subplot(1, 3, 2)
-
-            ax.set_title("Output")
-            ax.axis('off')
-            plt.imshow(img_output)
-            plt.pause(0.001)
-
-            ax = plt.subplot(1, 3, 3)
-
-            ax.set_title("Inpainted")
-            ax.axis('off')
-            plt.imshow(img_inpainted)
-            plt.pause(0.001)
-            plt.show()
-
-        except Exception as ex:
-            print(ex)
-            return
-    else:
-        print("Else")
-        #dataset = ResImageDataset("Images", transform=transform)
-        test_train()
-
+    model = ResImageNet(try_to_train=True, image_dir="Images", epochs=10)
+    model.testImage()
+    return
 
 if __name__ == "__main__":
     main()
