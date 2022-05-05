@@ -1,4 +1,4 @@
-import ResImageNet
+from net import ResImageNet
 
 def main():
     model = ResImageNet(try_to_train=True, image_dir="Images", epochs=10)
