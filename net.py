@@ -236,6 +236,7 @@ class ResImageNet():
         shape = img_input.shape
         img_input = img_input.view(1, shape[0], shape[1], shape[2]).to(self.device, dtype = torch.float)
         img_output = self.model(img_input)
+        img_output = img_output.cpu().detach()
 
         return img_output
 
