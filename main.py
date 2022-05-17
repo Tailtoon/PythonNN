@@ -27,7 +27,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.model = ResImageNet(device="cpu", try_to_train=True, image_dir="Images")
+        self.model = ResImageNet(device="cuda", try_to_train=True, image_dir="Images", epochs=100)
         self.image_in_arr = None
         self.image_out_arr = None
 

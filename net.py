@@ -135,8 +135,8 @@ class _ResImageNet(nn.Module):
 class ResImageDataset(Dataset):
     def __init__(self, dir_name, transform=None):
         self.dir_name = dir_name
-        self.raw = os.listdir(os.path.join(dir_name, "raw"))
-        self.inpainted = os.listdir(os.path.join(dir_name, "inpainted"))
+        self.raw = sorted(os.listdir(os.path.join(dir_name, "raw")), key=lambda f: int("".join(filter(str.isdigit, f))))
+        self.inpainted = sorted(os.listdir(os.path.join(dir_name, "inpainted")), key=lambda f: int("".join(filter(str.isdigit, f))))
         self.transform = transform
     
     def __len__(self):
