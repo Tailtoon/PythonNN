@@ -21,13 +21,13 @@ from PySide2.QtGui import QImage, QPixmap, QColor
 
 import numpy as np
 
-from net import ResImageNet
+from pva_resimagenet import ResImageNet
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.model = ResImageNet(device="cuda", try_to_train=True, image_dir="Images", epochs=100)
+        self.model = ResImageNet(device="cuda", try_to_train=True, image_dir="Images", epochs=1)
         self.image_in_arr = None
         self.image_out_arr = None
 
