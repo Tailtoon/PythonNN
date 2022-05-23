@@ -1,8 +1,0 @@
-LICENSE
-README.md
-pyproject.toml
-setup.py
-src/pva_resimagenet.egg-info/PKG-INFO
-src/pva_resimagenet.egg-info/SOURCES.txt
-src/pva_resimagenet.egg-info/dependency_links.txt
-src/pva_resimagenet.egg-info/top_level.txt
