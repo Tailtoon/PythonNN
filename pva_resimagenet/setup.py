@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="pva-resimagenet",
-    version="0.0.1",
+    version="0.0.2",
     author="Vadim Pashkin",
     author_email="vaplev@mail.ru",
     description="NN based on U-Net and DenseNet for image restoration",
@@ -23,5 +23,13 @@ setuptools.setup(
     ],
     package_dir={"": "src"},
     packages=setuptools.find_packages(where="src"),
+    install_requires=[
+        'scikit-image',
+        'matplotlib',
+        'torch',
+        'torchvision',
+        'torchaudio',
+        'torchinfo',
+    ],
     python_requires="==3.8.10",
 )
