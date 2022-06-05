@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="pva-resimagenet",
-    version="0.0.2",
+    version="0.0.5",
     author="Vadim Pashkin",
     author_email="vaplev@mail.ru",
     description="NN based on U-Net and DenseNet for image restoration",

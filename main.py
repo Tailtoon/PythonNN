@@ -7,7 +7,7 @@ from skimage.util import img_as_ubyte
 
 from torchvision.transforms import transforms
 
-from PySide2.QtCore import QSize, Qt
+from PySide2.QtCore import QSize
 from PySide2.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -27,7 +27,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.model = ResImageNet(device="cuda", try_to_train=True, image_dir="Images", epochs=1)
+        self.model = ResImageNet(device="cpu", try_to_train=True, image_dir="Images", epochs=1)
         self.image_in_arr = None
         self.image_out_arr = None
 
@@ -41,8 +41,10 @@ class MainWindow(QMainWindow):
         self.open_action.triggered.connect(self.openFile)
         self.start_action = menu.addAction("Process the image")
         self.start_action.triggered.connect(self.processImage)
+        self.start_action.setDisabled(True)
         self.save_action = menu.addAction("Save image to file")
         self.save_action.triggered.connect(self.saveImage)
+        self.save_action.setDisabled(True)
 
         layout = QHBoxLayout()
 
@@ -96,6 +98,8 @@ class MainWindow(QMainWindow):
             tmp_pix.fill(QColor(200, 200, 200))
             self.image_out.setPixmap(tmp_pix)
 
+            self.start_action.setDisabled(False)
+
     def processImage(self):
         if self.image_in_arr != None:
             image_out = self.model(self.image_in_arr)
@@ -108,6 +112,8 @@ class MainWindow(QMainWindow):
             bytes_per_line = 3 * width
             qimage_out = QImage(self.image_out_arr, width, height, bytes_per_line, QImage.Format_RGB888)
             self.image_out.setPixmap(QPixmap(qimage_out))
+
+            self.save_action.setDisabled(False)
 
     def saveImage(self):
         dialog_filters = "JPEG (*.jpg *.jpeg *.jpe *.jfif);;PNG (*.png);;GIF (*.gif);;BMP (*.bmp)"

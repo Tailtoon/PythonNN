@@ -21,6 +21,8 @@ def generateDefectivePhotos(path):
     handmade_mask_list = [item for item in mask_list if "handmade" in item]
     for item in handmade_mask_list:
         mask_list.remove(item)
+    #print(mask_list)
+    #print(handmade_mask_list)
 
     for i in range(len(photo_list)):
         print("Start processing image {}".format(i + 1))
@@ -35,7 +37,7 @@ def generateDefectivePhotos(path):
         
         img = img_as_float64(img)
 
-        if random.random() < 0.1:
+        if random.random() < 0.3:
             index = random.randint(0, len(handmade_mask_list) - 1)
             mask = io.imread(os.path.join(path, "mask", handmade_mask_list[index]))
         else:

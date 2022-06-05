@@ -1,1 +1,1 @@
-from .src.net import *
+from .src.pva_resimagenet import *
